@@ -1,0 +1,14 @@
+{
+  "name": "sumou-fleet",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sumou Fleet - Android app (Capacitor wrapper with background GPS)",
+  "devDependencies": {
+    "@capacitor/cli": "^5.7.8"
+  },
+  "dependencies": {
+    "@capacitor/core": "^5.7.8",
+    "@capacitor/android": "^5.7.8",
+    "@capacitor-community/background-geolocation": "^1.2.20"
+  }
+}
