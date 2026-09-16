@@ -1,0 +1,10 @@
+{
+  "appId": "com.sumou.fleet",
+  "appName": "Sumou Fleet",
+  "webDir": "www",
+  "server": {
+    "url": "https://fleetsmou.github.io/Driver-s-App/",
+    "androidScheme": "https",
+    "cleartext": false
+  }
+}
