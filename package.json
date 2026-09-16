@@ -9,6 +9,6 @@
   "dependencies": {
     "@capacitor/core": "^5.7.8",
     "@capacitor/android": "^5.7.8",
-    "@capacitor-community/background-geolocation": "^1.2.20"
+    "@capacitor-community/background-geolocation": "^1.2.0"
   }
 }
