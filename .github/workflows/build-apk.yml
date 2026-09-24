@@ -3,7 +3,7 @@ name: Build Sumou Fleet APK
 on:
   push:
     branches: [ main ]
-  workflow_dispatch:   # lets you run it manually from the Actions tab
+  workflow_dispatch:
 
 jobs:
   build:
@@ -34,6 +34,20 @@ jobs:
 
       - name: Sync Capacitor
         run: npx cap sync android
+
+      - name: Add Transistorsoft maven repos
+        run: |
+          cat >> android/build.gradle <<'GRADLE'
+
+          allprojects {
+              repositories {
+                  maven { url "${project(':transistorsoft-capacitor-background-geolocation').projectDir}/libs" }
+                  maven { url "${project(':transistorsoft-capacitor-background-fetch').projectDir}/libs" }
+                  maven { url 'https://developer.huawei.com/repo/' }
+              }
+          }
+          GRADLE
+          tail -n 20 android/build.gradle
 
       - name: Build debug APK
         run: |
