@@ -44,6 +44,12 @@ jobs:
           echo 'android.suppressUnsupportedCompileSdk=35' >> android/gradle.properties
           cat >> android/build.gradle <<'GRADLE'
           allprojects {
+              configurations.all {
+                  resolutionStrategy {
+                      force 'com.transistorsoft:tslocationmanager:3.5.4'
+                      force 'com.transistorsoft:tslocationmanager-v21:3.5.4'
+                  }
+              }
               repositories {
                   maven { url "${project(':transistorsoft-capacitor-background-geolocation').projectDir}/libs" }
                   maven { url "${project(':transistorsoft-capacitor-background-fetch').projectDir}/libs" }
