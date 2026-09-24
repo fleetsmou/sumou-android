@@ -45,6 +45,8 @@ jobs:
           cat >> android/build.gradle <<'GRADLE'
           allprojects {
               configurations.all {
+                  exclude group: 'com.huawei.hms'
+                  exclude group: 'com.huawei.agconnect'
                   resolutionStrategy {
                       force 'com.transistorsoft:tslocationmanager:3.5.4'
                       force 'com.transistorsoft:tslocationmanager-v21:3.5.4'
