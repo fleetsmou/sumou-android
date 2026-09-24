@@ -37,29 +37,20 @@ jobs:
 
       - name: Configure Android build
         run: |
-          sed -i 's/minSdkVersion = 22/minSdkVersion = 24/' android/variables.gradle
           sed -i 's/compileSdkVersion = 33/compileSdkVersion = 34/' android/variables.gradle
           sed -i 's/com.android.tools.build:gradle:8.0.0/com.android.tools.build:gradle:8.1.4/' android/build.gradle
-          sed -i 's/org.gradle.jvmargs=.*/org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m/' android/gradle.properties
-          cat >> android/build.gradle <<'GRADLE'
-          allprojects {
-              configurations.all {
-                  resolutionStrategy {
-                      force 'com.transistorsoft:tslocationmanager:3.5.4'
-                      force 'com.transistorsoft:tslocationmanager-v21:3.5.4'
-                      force 'androidx.work:work-runtime:2.9.1'
-                      force 'androidx.work:work-runtime-ktx:2.9.1'
-                      force 'androidx.core:core:1.13.1'
-                      force 'androidx.core:core-ktx:1.13.1'
-                  }
-              }
-              repositories {
-                  maven { url "${project(':transistorsoft-capacitor-background-geolocation').projectDir}/libs" }
-                  maven { url "${project(':transistorsoft-capacitor-background-fetch').projectDir}/libs" }
-                  maven { url 'https://developer.huawei.com/repo/' }
-              }
-          }
-          GRADLE
+
+      - name: Inject Sumou native tracker
+        run: |
+          PKG=android/app/src/main/java/com/sumou/fleet
+          cp native-src/SumouTrackerPlugin.java "$PKG/SumouTrackerPlugin.java"
+          cp native-src/SumouTrackerService.java "$PKG/SumouTrackerService.java"
+          cp native-src/MainActivity.java "$PKG/MainActivity.java"
+          printf "\ndependencies { implementation 'com.google.android.gms:play-services-location:21.0.1' }\n" >> android/app/build.gradle
+          sed -i 's#<application#<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />\n    <uses-permission android:name="android.permission.WAKE_LOCK" />\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <application#' android/app/src/main/AndroidManifest.xml
+          sed -i 's#</application>#    <service android:name="com.sumou.fleet.SumouTrackerService" android:exported="false" android:foregroundServiceType="location" />\n    </application>#' android/app/src/main/AndroidManifest.xml
+          echo "----- MainActivity -----"; cat "$PKG/MainActivity.java"
+          echo "----- manifest -----"; cat android/app/src/main/AndroidManifest.xml
 
       - name: Build debug APK
         run: |
