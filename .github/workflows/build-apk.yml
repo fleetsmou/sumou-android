@@ -35,10 +35,12 @@ jobs:
       - name: Sync Capacitor
         run: npx cap sync android
 
-      - name: Add Transistorsoft maven repos
+      - name: Configure Android build
         run: |
+          sed -i 's/compileSdkVersion = 33/compileSdkVersion = 34/' android/variables.gradle
+          sed -i 's/com.android.tools.build:gradle:8.0.0/com.android.tools.build:gradle:8.1.4/' android/build.gradle
+          sed -i 's/org.gradle.jvmargs=.*/org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m/' android/gradle.properties
           cat >> android/build.gradle <<'GRADLE'
-
           allprojects {
               repositories {
                   maven { url "${project(':transistorsoft-capacitor-background-geolocation').projectDir}/libs" }
@@ -47,7 +49,6 @@ jobs:
               }
           }
           GRADLE
-          tail -n 20 android/build.gradle
 
       - name: Build debug APK
         run: |
