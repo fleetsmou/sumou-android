@@ -38,18 +38,19 @@ jobs:
       - name: Configure Android build
         run: |
           sed -i 's/minSdkVersion = 22/minSdkVersion = 24/' android/variables.gradle
-          sed -i 's/compileSdkVersion = 33/compileSdkVersion = 35/' android/variables.gradle
+          sed -i 's/compileSdkVersion = 33/compileSdkVersion = 34/' android/variables.gradle
           sed -i 's/com.android.tools.build:gradle:8.0.0/com.android.tools.build:gradle:8.1.4/' android/build.gradle
           sed -i 's/org.gradle.jvmargs=.*/org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=1024m/' android/gradle.properties
-          echo 'android.suppressUnsupportedCompileSdk=35' >> android/gradle.properties
           cat >> android/build.gradle <<'GRADLE'
           allprojects {
               configurations.all {
-                  exclude group: 'com.huawei.hms'
-                  exclude group: 'com.huawei.agconnect'
                   resolutionStrategy {
                       force 'com.transistorsoft:tslocationmanager:3.5.4'
                       force 'com.transistorsoft:tslocationmanager-v21:3.5.4'
+                      force 'androidx.work:work-runtime:2.9.1'
+                      force 'androidx.work:work-runtime-ktx:2.9.1'
+                      force 'androidx.core:core:1.13.1'
+                      force 'androidx.core:core-ktx:1.13.1'
                   }
               }
               repositories {
