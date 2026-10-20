@@ -3,16 +3,20 @@ package com.sumou.fleet;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.ServiceInfo;
 import android.location.Location;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.os.ResultReceiver;
 import android.os.SystemClock;
 
 import androidx.annotation.NonNull;
@@ -48,6 +52,8 @@ public class SumouTrackerService extends Service {
     private static final int NOTIF_ID = 4711;
     public static volatile boolean isRunning = false;
     public static volatile String runningShiftId;
+    public static volatile String startingShiftId;
+    private static volatile String failedToken, failedShift, failureReason;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService http = Executors.newSingleThreadExecutor();
@@ -78,32 +84,71 @@ public class SumouTrackerService extends Service {
         return prefs(context).getString("deadShift", null);
     }
 
+    public static boolean isRunningFor(Context context, String token, String shift) {
+        if (!isRunning || shift == null || !shift.equals(runningShiftId)) return false;
+        SharedPreferences p = prefs(context);
+        return TrackerPolicy.sameSession(token, shift, p.getString("token", null), p.getString("shift", null));
+    }
+
+    public static String statusReason(Context context, String token, String shift) {
+        String terminal = terminalReason(context, token, shift);
+        if (terminal != null) return terminal;
+        return TrackerPolicy.sameSession(token, shift, failedToken, failedShift) ? failureReason : null;
+    }
+
+    // Clear first, even if Android already killed the service. A later sticky restart
+    // must never resurrect a shift that the driver explicitly clocked out of.
+    public static boolean clearSavedSession(Context context, String token, String shift) {
+        SharedPreferences p = prefs(context);
+        String savedToken = p.getString("token", null), savedShift = p.getString("shift", null);
+        if (!TrackerPolicy.mayStopSession(token, shift, savedToken, savedShift)) return false;
+        return p.edit().remove("url").remove("apikey").remove("token").remove("shift").remove("interval").commit();
+    }
+
+    private static void reply(ResultReceiver receiver, boolean running, String shift, String reason) {
+        if (receiver == null) return;
+        Bundle result = new Bundle();
+        result.putBoolean("running", running);
+        result.putString("shiftId", shift);
+        if (reason != null) result.putString("reason", reason);
+        receiver.send(0, result);
+    }
+
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        final ResultReceiver receiver = intent == null ? null : intent.getParcelableExtra("receiver");
         if (intent != null && ACTION_STOP.equals(intent.getAction())) {
             String shift = intent.getStringExtra("shiftId"), token = intent.getStringExtra("token");
-            if (session != null && ((shift != null && !shift.equals(session.shift)) || (token != null && !token.equals(session.token)))) return START_STICKY;
+            if (session != null && !TrackerPolicy.mayStopSession(token, shift, session.token, session.shift)) return START_STICKY;
             stopTracking(null, false);
             return START_NOT_STICKY;
         }
         Session next = intent == null ? Session.restore(prefs(this)) : Session.from(intent);
         if (next == null || terminalReason(this, next.token, next.shift) != null) {
+            reply(receiver, false, next == null ? null : next.shift,
+                    next == null ? "INVALID_TRACKING_SESSION" : terminalReason(this, next.token, next.shift));
             if (session != null && isRunning) return START_STICKY;
             // A sticky restart without saved credentials must not leave a zombie GPS service.
             stopTracking(null, false);
             return START_NOT_STICKY;
         }
-        if (session != null && session.same(next) && isRunning) return START_STICKY;
+        if (session != null && session.same(next) && isRunning) {
+            reply(receiver, true, next.shift, null);
+            return START_STICKY;
+        }
         releaseTracking();
         session = next;
         next.save(prefs(this));
+        startingShiftId = next.shift;
+        failedToken = null; failedShift = null; failureReason = null;
         final long epoch = generation;
         try {
-            startForeground(NOTIF_ID, buildNotification());
-            isRunning = true;
-            runningShiftId = next.shift;
-            startTracking(next.interval, epoch);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                startForeground(NOTIF_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION);
+            else startForeground(NOTIF_ID, buildNotification());
+            startTracking(next.interval, epoch, receiver);
         } catch (Exception e) {
+            startFailed(next, receiver, "LOCATION_START_FAILED");
             stopTracking(null, false);
             return START_NOT_STICKY;
         }
@@ -119,12 +164,26 @@ public class SumouTrackerService extends Service {
             if (nm != null) nm.createNotificationChannel(ch);
             b = new Notification.Builder(this, CHANNEL_ID);
         } else b = new Notification.Builder(this);
+        Intent open = new Intent(this, MainActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        PendingIntent content = PendingIntent.getActivity(this, 0, open,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+            b.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE);
         return b.setContentTitle("On duty — GPS active")
                 .setContentText("Sumou Fleet is sharing your live location.")
-                .setSmallIcon(android.R.drawable.ic_menu_mylocation).setOngoing(true).build();
+                .setContentIntent(content).setCategory(Notification.CATEGORY_SERVICE)
+                .setSmallIcon(android.R.drawable.ic_menu_mylocation)
+                .setOnlyAlertOnce(true).setOngoing(true).build();
     }
 
-    private void startTracking(int interval, final long epoch) {
+    private void startFailed(Session failed, ResultReceiver receiver, String reason) {
+        failedToken = failed.token; failedShift = failed.shift; failureReason = reason;
+        reply(receiver, false, failed.shift, reason);
+    }
+
+    private void startTracking(int interval, final long epoch, final ResultReceiver receiver) {
+        final Session starting = session;
         PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
         if (pm != null) {
             wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "sumou:track");
@@ -146,9 +205,23 @@ public class SumouTrackerService extends Service {
                 drain();
             }
         };
-        fused.requestLocationUpdates(req, callback, Looper.getMainLooper()).addOnFailureListener(e -> {
-            if (epoch == generation && !destroyed) stopTracking(null, false);
-        });
+        fused.requestLocationUpdates(req, callback, Looper.getMainLooper())
+                .addOnSuccessListener(unused -> {
+                    if (epoch != generation || destroyed || session == null) {
+                        reply(receiver, false, starting.shift, "TRACKING_CANCELLED");
+                        return;
+                    }
+                    runningShiftId = starting.shift;
+                    startingShiftId = null;
+                    isRunning = true;
+                    reply(receiver, true, starting.shift, null);
+                    drain();
+                }).addOnFailureListener(e -> {
+                    if (epoch == generation && !destroyed) {
+                        startFailed(starting, receiver, "LOCATION_START_FAILED");
+                        stopTracking(null, false);
+                    } else reply(receiver, false, starting.shift, "TRACKING_CANCELLED");
+                });
     }
 
     private static float accuracy(Location loc) { return loc.hasAccuracy() ? loc.getAccuracy() : 999f; }
@@ -203,7 +276,8 @@ public class SumouTrackerService extends Service {
             p.put("time", clock.format(new Date(loc.getTime())).toLowerCase(Locale.US));
             JSONObject body = new JSONObject();
             body.put("p_token", request.session.token); body.put("p_shift", request.session.shift);
-            body.put("p_point", true); body.put("p", p);
+            // Live position only: never request an insert into the route history table.
+            body.put("p_point", false); body.put("p", p);
             HttpURLConnection c = (HttpURLConnection) new URL(request.session.url).openConnection();
             request.connection = c;
             if (request.cancelled) return;
@@ -271,7 +345,7 @@ public class SumouTrackerService extends Service {
             if (inFlight.connection != null) inFlight.connection.disconnect();
         }
         pending = null; lastAccepted = null; failures = 0; nextAttemptElapsed = 0;
-        session = null; isRunning = false; runningShiftId = null;
+        session = null; isRunning = false; runningShiftId = null; startingShiftId = null;
     }
 
     private void stopTracking(String reason, boolean terminal) {
@@ -323,12 +397,16 @@ public class SumouTrackerService extends Service {
             return new Session(url, apikey, token, shift, interval);
         }
         boolean same(Session other) { return other != null && TrackerPolicy.sameSession(token, shift, other.token, other.shift) && url.equals(other.url) && apikey.equals(other.apikey); }
-        void save(SharedPreferences p) { p.edit().putString("url", url).putString("apikey", apikey).putString("token", token).putString("shift", shift).putInt("interval", interval).apply(); }
+        void save(SharedPreferences p) { p.edit().putString("url", url).putString("apikey", apikey).putString("token", token).putString("shift", shift).putInt("interval", interval).commit(); }
     }
 }
 
 // Pure policy kept in this file so the existing Android build copies it with the service.
 final class TrackerPolicy {
+    static boolean mayStopSession(String token, String shift, String currentToken, String currentShift) {
+        return (token == null || currentToken == null || token.equals(currentToken))
+                && (shift == null || currentShift == null || shift.equals(currentShift));
+    }
     static boolean sameSession(String token, String shift, String otherToken, String otherShift) {
         return token != null && shift != null && token.equals(otherToken) && shift.equals(otherShift);
     }
